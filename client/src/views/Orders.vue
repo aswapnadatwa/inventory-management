@@ -74,6 +74,69 @@
           </table>
         </div>
       </div>
+
+      <!-- Submitted Restocking Orders -->
+      <div class="card" style="margin-top: 1.5rem;">
+        <div class="card-header">
+          <h3 class="card-title">Submitted Restocking Orders ({{ restockingOrders.length }})</h3>
+        </div>
+
+        <div v-if="restockingOrders.length === 0" class="restock-empty">
+          No restocking orders submitted yet.
+        </div>
+        <div v-else class="table-container">
+          <table class="restock-table">
+            <thead>
+              <tr>
+                <th class="col-order-number">Order #</th>
+                <th class="col-date">Submitted</th>
+                <th class="col-items">Items</th>
+                <th class="col-date">Expected Delivery</th>
+                <th class="col-value">Total Value</th>
+                <th class="col-status">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="order in restockingOrders" :key="order.id">
+                <td class="col-order-number"><strong>{{ order.order_number }}</strong></td>
+                <td class="col-date">{{ formatDate(order.order_date) }}</td>
+                <td class="col-items">
+                  <details class="items-details">
+                    <summary class="items-summary">
+                      {{ order.items.length }} item{{ order.items.length !== 1 ? 's' : '' }}
+                    </summary>
+                    <div class="items-dropdown restock-dropdown">
+                      <div v-for="item in order.items" :key="item.sku" class="item-entry">
+                        <div class="item-entry-top">
+                          <span class="item-name">{{ item.name }}</span>
+                          <span :class="['badge', item.source === 'backlog' ? 'danger' : 'info']">
+                            {{ item.source === 'backlog' ? 'Backlog' : 'Demand Forecast' }}
+                          </span>
+                        </div>
+                        <div class="item-meta">
+                          SKU: {{ item.sku }}
+                          &middot; Qty: {{ item.quantity.toLocaleString() }}
+                          &middot; ${{ item.unit_cost.toLocaleString() }} each
+                          <span
+                            v-if="item.lead_time_days"
+                            :class="['badge', getLeadTimeBadgeClass(item.lead_time_days)]"
+                            style="margin-left: 0.375rem;"
+                          >{{ item.lead_time_days }}d</span>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                </td>
+                <td class="col-date">{{ formatDate(order.expected_delivery) }}</td>
+                <td class="col-value"><strong>${{ order.total_value.toLocaleString() }}</strong></td>
+                <td class="col-status">
+                  <span class="badge info">{{ order.status }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -95,6 +158,7 @@ export default {
     const loading = ref(true)
     const error = ref(null)
     const orders = ref([])
+    const restockingOrders = ref([])
 
     // Use shared filters
     const {
@@ -153,15 +217,34 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    const loadRestockingOrders = async () => {
+      try {
+        restockingOrders.value = await api.getRestockingOrders()
+      } catch (err) {
+        console.error('Failed to load restocking orders:', err)
+      }
+    }
+
+    const getLeadTimeBadgeClass = (days) => {
+      if (days <= 7) return 'success'
+      if (days <= 14) return 'warning'
+      return 'danger'
+    }
+
+    onMounted(() => {
+      loadOrders()
+      loadRestockingOrders()
+    })
 
     return {
       t,
       loading,
       error,
       orders,
+      restockingOrders,
       getOrdersByStatus,
       getOrderStatusClass,
+      getLeadTimeBadgeClass,
       formatDate,
       currencySymbol,
       translateProductName,
@@ -275,5 +358,31 @@ export default {
 .item-meta {
   font-size: 0.813rem;
   color: #64748b;
+}
+
+/* Restocking orders */
+.restock-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.restock-empty {
+  text-align: center;
+  padding: 2rem;
+  color: #64748b;
+  font-size: 0.938rem;
+}
+
+.restock-dropdown {
+  min-width: 340px;
+  max-width: 460px;
+}
+
+.item-entry-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
 }
 </style>
