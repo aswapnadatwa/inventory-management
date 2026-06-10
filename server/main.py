@@ -2,7 +2,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
+from datetime import datetime, timedelta
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+
+# In-memory store for submitted restocking orders (resets on server restart)
+restocking_orders = []
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -119,6 +123,33 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockingOrderItem(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_cost: float
+    source: str  # "backlog" or "demand"
+    lead_time_days: int
+
+class RestockingOrder(BaseModel):
+    id: str
+    order_number: str
+    items: List[RestockingOrderItem]
+    status: str
+    order_date: str
+    expected_delivery: str
+    total_value: float
+
+class CreateRestockingItemRequest(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_cost: float
+    source: str  # "backlog" or "demand"
+
+class CreateRestockingOrderRequest(BaseModel):
+    items: List[CreateRestockingItemRequest]
 
 # API endpoints
 @app.get("/")
@@ -303,6 +334,63 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+@app.get("/api/restocking-orders", response_model=List[RestockingOrder])
+def get_restocking_orders():
+    """Get all submitted restocking orders"""
+    return restocking_orders
+
+@app.post("/api/restocking-orders", response_model=RestockingOrder)
+def create_restocking_order(request: CreateRestockingOrderRequest):
+    """Submit a restocking order. Calculates per-item lead time based on backlog shortfall severity."""
+    now = datetime.now()
+    order_idx = len(restocking_orders) + 1
+    order_id = f"RST-{order_idx:04d}"
+    order_number = f"RST-{now.year}-{order_idx:04d}"
+
+    items_with_lead_time = []
+    max_lead_time = 7
+
+    for item in request.items:
+        lead_time = 7  # default for demand-forecast items
+
+        # Backlog items: derive lead time from shortfall ratio (needed / available)
+        if item.source == "backlog":
+            backlog = next((b for b in backlog_items if b["item_sku"] == item.sku), None)
+            if backlog:
+                qty_available = max(backlog.get("quantity_available", 1), 1)
+                qty_needed = backlog.get("quantity_needed", 1)
+                ratio = qty_needed / qty_available
+                if ratio >= 2.5:
+                    lead_time = 21
+                elif ratio >= 1.5:
+                    lead_time = 14
+
+        max_lead_time = max(max_lead_time, lead_time)
+        items_with_lead_time.append({
+            "sku": item.sku,
+            "name": item.name,
+            "quantity": item.quantity,
+            "unit_cost": item.unit_cost,
+            "source": item.source,
+            "lead_time_days": lead_time,
+        })
+
+    total_value = round(sum(i["quantity"] * i["unit_cost"] for i in items_with_lead_time), 2)
+    expected_delivery = (now + timedelta(days=max_lead_time)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    order = {
+        "id": order_id,
+        "order_number": order_number,
+        "items": items_with_lead_time,
+        "status": "Processing",
+        "order_date": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "expected_delivery": expected_delivery,
+        "total_value": total_value,
+    }
+
+    restocking_orders.append(order)
+    return order
 
 if __name__ == "__main__":
     import uvicorn
